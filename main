@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+import subprocess
+
+def run_script(script_name):
+    try:
+        subprocess.run(["python3", script_name], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to run {script_name}: {e}")
+
+def print_help():
+    print("Please select an option from the following list:")
+    print("1: Run network scan")
+    print("2: Start ARP spoofing")
+    print("3: Run ARP spoof detection")
+    print("4: Add static ARP entries")
+    print("h: for help")
+    print("exit: Exit the program")
+
+def main():
+    while True:
+        print_help()
+        option = input("Enter your choice: ").strip().lower()
+
+        if option == '1':
+            run_script('scan.py')
+        elif option == '2':
+            run_script('arpspoo.py')
+        elif option == '3':
+            run_script('de.py')
+        elif option == '4':
+            run_script('prevent.py')
+        elif option == 'help':
+            print_help()
+        elif option == 'exit':
+            print("Exiting the program.")
+            break
+        else:
+            print("Invalid option. Please try again.")
+
+if __name__ == "__main__":
+    main()
