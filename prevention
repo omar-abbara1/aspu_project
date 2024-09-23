@@ -1,0 +1,121 @@
+import scapy.all as scapy
+import os
+import subprocess
+from datetime import datetime
+import netifaces
+
+# إعداد المتغيرات العامة
+INTERFACE = "eth0"  # استبدل باسم واجهة الشبكة
+LOG_FILE = "/var/log/arp_spoofing.log"  # ملف تسجيل الأحداث
+
+def log_event(event):
+    with open(LOG_FILE, "a") as log_file:
+        log_file.write(f"{datetime.now()} - {event}\n")
+
+def get_mac(ip):
+    arp_request = scapy.ARP(pdst=ip)
+    broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
+    arp_request_broadcast = broadcast / arp_request
+    answered_list = scapy.srp(arp_request_broadcast, timeout=1, verbose=False)[0]
+    
+    return answered_list[0][1].hwsrc if answered_list else None
+
+def get_default_gateway():
+    # العثور على عنوان الـ IP للبوابة الافتراضية (الراوتر)
+    gateways = netifaces.gateways()
+    return gateways['default'][netifaces.AF_INET][0]
+
+def get_local_ip():
+    # الحصول على عنوان الـ IP المحلي
+    return netifaces.ifaddresses(INTERFACE)[netifaces.AF_INET][0]['addr']
+
+def get_local_mac():
+    # الحصول على عنوان الـ MAC المحلي
+    return netifaces.ifaddresses(INTERFACE)[netifaces.AF_LINK][0]['addr']
+
+def populate_whitelist():
+    # استدعاء البوابة الافتراضية (الراوتر)
+    router_ip = get_default_gateway()
+    router_mac = get_mac(router_ip)
+
+    # استدعاء الجهاز المحلي
+    local_ip = get_local_ip()
+    local_mac = get_local_mac()
+
+    WHITELIST = {
+        router_ip: router_mac,
+        local_ip: local_mac
+    }
+    
+    event = f"[INFO] Whitelist populated: {WHITELIST}"
+    print(event)
+    log_event(event)
+
+    return WHITELIST
+
+def arp_monitor_callback(pkt, WHITELIST):
+    if pkt.haslayer(scapy.ARP):
+        arp_layer = pkt.getlayer(scapy.ARP)
+        if arp_layer.op == 2:  # ARP reply (is-at)
+            real_mac = WHITELIST.get(arp_layer.psrc)
+            response_mac = arp_layer.hwsrc
+
+            if real_mac and real_mac != response_mac:
+                event = f"[ALERT] ARP Spoofing detected! IP: {arp_layer.psrc}, Expected MAC: {real_mac}, Actual MAC: {response_mac}"
+                print(event)
+                log_event(event)
+                block_attacker(arp_layer.psrc, arp_layer.hwsrc)
+                reset_arp_entry(arp_layer.psrc, real_mac)
+
+def block_attacker(ip, mac):
+    event = f"[ACTION] Blocking IP: {ip} with MAC: {mac}"
+    print(event)
+    log_event(event)
+    # استخدام iptables لمنع حركة المرور من عنوان الـ IP و MAC المشبوه
+    subprocess.call(["iptables", "-A", "INPUT", "-s", ip, "-m", "mac", "--mac-source", mac, "-j", "DROP"])
+    subprocess.call(["iptables", "-A", "FORWARD", "-s", ip, "-m", "mac", "--mac-source", mac, "-j", "DROP"])
+    subprocess.call(["iptables", "-A", "OUTPUT", "-s", ip, "-m", "mac", "--mac-source", mac, "-j", "DROP"])
+    subprocess.call(["iptables", "-A", "INPUT", "-m", "mac", "--mac-source", mac, "-j", "DROP"])
+    subprocess.call(["iptables", "-A", "FORWARD", "-m", "mac", "--mac-source", mac, "-j", "DROP"])
+    subprocess.call(["iptables", "-A", "OUTPUT", "-m", "mac", "--mac-source", mac, "-j", "DROP"])
+
+def reset_arp_entry(ip, mac):
+    event = f"[ACTION] Resetting ARP entry for IP {ip} with correct MAC {mac}."
+    print(event)
+    log_event(event)
+    subprocess.call(["arp", "-s", ip, mac])
+
+def enforce_static_arp(WHITELIST):
+    for ip, mac in WHITELIST.items():
+        event = f"[INFO] Enforcing static ARP entry for IP {ip} with MAC {mac}."
+        print(event)
+        log_event(event)
+        subprocess.call(["arp", "-s", ip, mac])
+
+def harden_network():
+    print("[INFO] Hardening network settings.")
+    log_event("[INFO] Hardening network settings.")
+    # تعطيل إعادة توجيه الحزم لمنع MitM
+    subprocess.call(["sysctl", "-w", "net.ipv4.ip_forward=0"])
+    # تمكين حماية ARP على مستوى النواة
+    subprocess.call(["sysctl", "-w", "net.ipv4.conf.all.arp_filter=1"])
+    subprocess.call(["sysctl", "-w", "net.ipv4.conf.default.arp_filter=1"])
+    # منع حزم ARP غير المرغوب فيها
+    subprocess.call(["iptables", "-A", "INPUT", "-p", "arp", "--arp-mac", "!", "-j", "DROP"])
+
+def main():
+    WHITELIST = populate_whitelist()
+    enforce_static_arp(WHITELIST)
+    harden_network()
+
+    print("[INFO] Starting ARP Spoofing detection...")
+    log_event("[INFO] Starting ARP Spoofing detection...")
+    scapy.sniff(store=False, prn=lambda pkt: arp_monitor_callback(pkt, WHITELIST), iface=INTERFACE)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n[INFO] Exiting and cleaning up...")
+        log_event("[INFO] Exiting and cleaning up...")
+        subprocess.call(["iptables", "-F"])
