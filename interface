@@ -12,7 +12,7 @@ import time
 # Global Variables
 IP_MAC_PAIRS = {}
 ARP_REQ_TABLE = {}
-INTERFACE = "eth0"  # Update this if needed
+INTERFACE = "wlan0"  # Update this if needed
 LOG_FILE = "/var/log/network_hardening.log"  # Change this path if necessary
 spoofing_active = False  # Flag to control spoofing state
 spoof_thread = None
@@ -73,7 +73,8 @@ def harden_network():
     subprocess.call(["sysctl", "-w", "net.ipv4.ip_forward=0"])
     subprocess.call(["sysctl", "-w", "net.ipv4.conf.all.arp_filter=1"])
     subprocess.call(["sysctl", "-w", "net.ipv4.conf.default.arp_filter=1"])
-    subprocess.call(["iptables", "-A", "INPUT", "-p", "arp", "--arp-mac", "!", "-j", "DROP"])
+    subprocess.call(["iptables", "-A", "INPUT", "-p", "arp", "-j", "DROP"])
+
 
 def start_arp_prevention():
     result_entry.insert("end", "Starting ARP Prevention...\n")
@@ -130,12 +131,14 @@ def spoof_detection(pkt):
         ip = IP(dst=ip_)
         SYN = TCP(sport=40508, dport=40508, flags="S", seq=12345)
         E = Ether(dst=mac)
-        if not srp1(E / ip / SYN, verbose=False, timeout=2):
+        # Change this line
+        if not scapy.srp1(E / ip / SYN, verbose=False, timeout=2):
             alarm('No TCP ACK, fake IP-MAC pair')
         else:
             IP_MAC_PAIRS[ip_] = pkt[ARP].hwsrc
     else:
         send(ARP(op=1, pdst=ip_), verbose=False)
+
 
 def alarm(alarm_type):
     result_entry.insert("end", f'Under Attack: {alarm_type}\n')
@@ -223,6 +226,31 @@ def open_fourth_window():
     interval_entry.pack(pady=10, padx=20, fill="x")
     interval_entry.insert(0, "4")  # Default value
 
+def open_fourth_window():
+    second_window.withdraw()
+    fourth_window = ctk.CTkToplevel()
+    fourth_window.title("ARP Spoof Attack")
+    fourth_window.geometry("600x450")
+
+    frame = ctk.CTkFrame(fourth_window, corner_radius=20)
+    frame.pack(pady=20, padx=20, fill="both", expand=True)
+
+    ip_target_label = ctk.CTkLabel(frame, text="Enter target IP address", font=("Arial", 16))
+    ip_target_label.pack(pady=10)
+    ip_target_entry = ctk.CTkEntry(frame, font=("Arial", 16))
+    ip_target_entry.pack(pady=10, padx=20, fill="x")
+
+    ip_gateway_label = ctk.CTkLabel(frame, text="Enter gateway IP address", font=("Arial", 16))
+    ip_gateway_label.pack(pady=10)
+    ip_gateway_entry = ctk.CTkEntry(frame, font=("Arial", 16))
+    ip_gateway_entry.pack(pady=10, padx=20, fill="x")
+
+    interval_label = ctk.CTkLabel(frame, text="Enter interval (seconds)", font=("Arial", 16))
+    interval_label.pack(pady=10)
+    interval_entry = ctk.CTkEntry(frame, font=("Arial", 16))
+    interval_entry.pack(pady=10, padx=20, fill="x")
+    interval_entry.insert(0, "4")  # Default value
+
     def on_execute():
         ip_target = ip_target_entry.get()
         ip_gateway = ip_gateway_entry.get()
@@ -230,13 +258,29 @@ def open_fourth_window():
             interval = float(interval_entry.get())
         except ValueError:
             interval = 4
-        start_spoof_thread(ip_target, ip_gateway, interval)
+        threading.Thread(target=start_arp_spoof, args=(ip_target, ip_gateway, interval), daemon=True).start()
+
+    action_button = ctk.CTkButton(frame, text="Start ARP Spoofing", command=on_execute, width=200, height=40, font=("Arial", 14))
+    action_button.pack(pady=10)
+
+    stop_button = ctk.CTkButton(frame, text="Stop ARP Spoofing", command=stop_spoofing, width=200, height=40, font=("Arial", 14))
+    stop_button.pack(pady=10)
+
+    back_button = ctk.CTkButton(frame, text="Back", command=lambda: go_back(fourth_window), width=200, height=40, font=("Arial", 14))
+    back_button.pack(pady=10)
+
 
     def on_stop():
         stop_spoofing()
 
     action_button = ctk.CTkButton(frame, text="Start ARP Spoofing", command=on_execute, width=200, height=40, font=("Arial", 14))
     action_button.pack(pady=10)
+
+    stop_button = ctk.CTkButton(frame, text="Stop ARP Spoofing", command=on_stop, width=200, height=40, font=("Arial", 14))
+    stop_button.pack(pady=10)
+
+    back_button = ctk.CTkButton(frame, text="Back", command=lambda: go_back(fourth_window), width=200, height=40, font=("Arial", 14))
+    back_button.pack(pady=10)
 
     stop_button = ctk.CTkButton(frame, text="Stop ARP Spoofing", command=on_stop, width=200, height=40, font=("Arial", 14))
     stop_button.pack(pady=10)
