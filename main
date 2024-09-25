@@ -12,7 +12,7 @@ def print_help():
     print("1: Run network scan")
     print("2: Start ARP spoofing")
     print("3: Run ARP spoof detection")
-    print("4: Add static ARP entries")
+    print("4: ARP prevention")
     print("h: for help")
     print("exit: Exit the program")
 
