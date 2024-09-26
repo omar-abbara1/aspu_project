@@ -14,7 +14,7 @@ This project is a Python-based ARP Spoofing detection and prevention tool, desig
 
 - **Python 3.x**
 - **scapy** package: `pip install scapy`
-- **customtkinter** package: 'pip install customtkinter' "for GUI only"
+- **customtkinter** package: `pip install customtkinter` "for GUI only"
 - Root privileges for modifying network configurations and running `iptables`.
 
 ## Installation
