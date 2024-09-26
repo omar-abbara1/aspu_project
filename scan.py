@@ -26,7 +26,7 @@ def scan_network(ip_range, threads=100):
 
 ip_range = "192.168.1.1/24"
 devices = scan_network(ip_range, threads=50)
-
+#edit threads as network needs
 for device in devices:
     print(f"IP: {device['ip']}, MAC: {device['mac']}")
 
