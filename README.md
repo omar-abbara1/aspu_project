@@ -9,12 +9,12 @@ This project is a Python-based ARP Spoofing detection and prevention tool, desig
 - Monitor ARP traffic and detect spoofing attempts.
 - Block attackers using `iptables` rules.
 - Harden the network by disabling IP forwarding and enforcing static ARP entries.
-- Logging of ARP spoofing events.
 
 ## Requirements
 
 - **Python 3.x**
 - **scapy** package: `pip install scapy`
+- **customtkinter** package: 'pip install customtkinter' "for GUI only"
 - Root privileges for modifying network configurations and running `iptables`.
 
 ## Installation
