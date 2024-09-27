@@ -3,9 +3,8 @@ import subprocess
 from datetime import datetime
 import netifaces
 
-# إعداد المتغيرات العامة
-INTERFACE = "eth0"  # استبدل باسم واجهة الشبكة
-LOG_FILE = "/var/log/network_hardening.log"  # ملف تسجيل الأحداث
+INTERFACE = "wlan0"  #edit as needed
+LOG_FILE = "/var/log/network_hardening.log"    
 
 def log_event(event):
     with open(LOG_FILE, "a") as log_file:
@@ -20,24 +19,19 @@ def get_mac(ip):
     return answered_list[0][1].hwsrc if answered_list else None
 
 def get_default_gateway():
-    # العثور على عنوان الـ IP للبوابة الافتراضية (الراوتر)
     gateways = netifaces.gateways()
     return gateways['default'][netifaces.AF_INET][0]
 
 def get_local_ip():
-    # الحصول على عنوان الـ IP المحلي
     return netifaces.ifaddresses(INTERFACE)[netifaces.AF_INET][0]['addr']
 
 def get_local_mac():
-    # الحصول على عنوان الـ MAC المحلي
     return netifaces.ifaddresses(INTERFACE)[netifaces.AF_LINK][0]['addr']
 
 def populate_whitelist():
-    # استدعاء البوابة الافتراضية (الراوتر)
     router_ip = get_default_gateway()
     router_mac = get_mac(router_ip)
 
-    # استدعاء الجهاز المحلي
     local_ip = get_local_ip()
     local_mac = get_local_mac()
 
@@ -62,12 +56,9 @@ def enforce_static_arp(WHITELIST):
 def harden_network():
     print("[INFO] Hardening network settings.")
     log_event("[INFO] Hardening network settings.")
-    # تعطيل إعادة توجيه الحزم لمنع MitM
     subprocess.call(["sysctl", "-w", "net.ipv4.ip_forward=0"])
-    # تمكين حماية ARP على مستوى النواة
     subprocess.call(["sysctl", "-w", "net.ipv4.conf.all.arp_filter=1"])
     subprocess.call(["sysctl", "-w", "net.ipv4.conf.default.arp_filter=1"])
-    # منع حزم ARP غير المرغوب فيها
     subprocess.call(["iptables", "-A", "INPUT", "-p", "arp", "--arp-mac", "!", "-j", "DROP"])
 
 def main():
