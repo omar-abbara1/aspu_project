@@ -10,7 +10,7 @@ ARP_REQ_TABLE = {}
 
 def sniff_requests():
   
-    sniff(filter='arp', lfilter=outgoing_req, prn=add_req, iface=conf.iface)
+    sniff(filter='arp', lfilter=outgoing_req, prn=check_arp_header, iface=conf.iface)
 
 
 def sniff_replays():
@@ -41,44 +41,10 @@ def outgoing_req(pkt):
     return pkt[ARP].psrc == str(get_if_addr(conf.iface)) and pkt[ARP].op == 1
 
 
-def add_req(pkt):
-
-    ARP_REQ_TABLE[pkt[ARP].pdst] = datetime.datetime.now()
-
-
 def check_arp_header(pkt):
 
     if not pkt[Ether].src == pkt[ARP].hwsrc or not pkt[Ether].dst == pkt[ARP].hwdst:
         return alarm('inconsistent ARP message')
-    return known_traffic(pkt)
-
-
-def known_traffic(pkt):
-  
-    if pkt[ARP].psrc not in IP_MAC_PAIRS.keys():
-        return spoof_detection(pkt)
-    elif IP_MAC_PAIRS[pkt[ARP].psrc] == pkt[ARP].hwsrc:
-        return
-    return alarm('IP-MAC pair change detected')
-
-
-def spoof_detection(pkt):
-    
-    ip_ = pkt[ARP].psrc
-    t = datetime.datetime.now()
-    mac = pkt[0][ARP].hwsrc
-    if ip_ in ARP_REQ_TABLE.keys() and (t - ARP_REQ_TABLE[ip_]).total_seconds() <= 5:
-        ip = IP(dst=ip_)
-        SYN = TCP(sport=40508, dport=40508, flags="S", seq=12345)
-        E = Ether(dst=mac)
-        if not srp1(E / ip / SYN, verbose=False, timeout=2):
-            alarm('No TCP ACK, fake IP-MAC pair')
-        else:
-            IP_MAC_PAIRS[ip_] = pkt[ARP].hwsrc
-   
-    else:
-        send(ARP(op=1, pdst=ip_), verbose=False)
-
 
 def alarm(alarm_type):
 
