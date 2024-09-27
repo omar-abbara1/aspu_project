@@ -59,8 +59,6 @@ def harden_network():
     subprocess.call(["sysctl", "-w", "net.ipv4.ip_forward=0"])
     subprocess.call(["sysctl", "-w", "net.ipv4.conf.all.arp_filter=1"])
     subprocess.call(["sysctl", "-w", "net.ipv4.conf.default.arp_filter=1"])
-    subprocess.call(["iptables", "-A", "INPUT", "-p", "arp", "--arp-mac", "!", "-j", "DROP"])
-
 def main():
     WHITELIST = populate_whitelist()
     enforce_static_arp(WHITELIST)
