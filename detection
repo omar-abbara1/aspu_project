@@ -32,12 +32,7 @@ def incoming_reply(pkt):
 
 
 def outgoing_req(pkt):
-    """
-    checks if the packet is an outgoing ARP request message
-
-    :param pkt: sniffed packet
-    :return: the packet is an incoming ARP reply message (True od False)
-    """
+   
     return pkt[ARP].psrc == str(get_if_addr(conf.iface)) and pkt[ARP].op == 1
 
 
