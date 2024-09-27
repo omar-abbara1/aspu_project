@@ -9,7 +9,6 @@ import subprocess
 import netifaces
 import time
 
-# Global Variables
 IP_MAC_PAIRS = {}
 ARP_REQ_TABLE = {}
 INTERFACE = "wlan0"  # Update this if needed
@@ -17,7 +16,6 @@ LOG_FILE = "/var/log/network_hardening.log"  # Change this path if necessary
 spoofing_active = False  # Flag to control spoofing state
 spoof_thread = None
 
-# Appearance setup
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
