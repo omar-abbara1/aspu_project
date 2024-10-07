@@ -7,6 +7,7 @@ This project is a Python-based ARP Spoofing detection and prevention tool, desig
 
 - Dynamically detect trusted IP and MAC addresses on the local network.
 - Monitor ARP traffic and detect spoofing attempts.
+- Arp spoofing attack as a kind of active scaning.
 - Block attackers using `iptables` rules.
 - Harden the network by disabling IP forwarding and enforcing static ARP entries.
 
